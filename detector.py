@@ -136,60 +136,44 @@ def process_video(path, mode="GROUND", conf=0.25):
     cap = cv2.VideoCapture(path)
 
     fps = cap.get(cv2.CAP_PROP_FPS)
-    if fps == 0 or fps is None:
+    if not fps or fps == 0:
         fps = 25
 
     width  = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
     temp_path   = "temp_processed.mp4"
-    output_path = "processed_video.mp4"
+    final_path  = "processed_video.mp4"
 
-    # Process every 5th frame → effective FPS = original_fps / 5
-    output_fps = max(fps / 5, 1)
-
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    out = cv2.VideoWriter(temp_path, fourcc, output_fps, (width, height))
-
-    frame_count   = 0
-    frame_written = 0
-    total_objects = 0
-    total_threats = 0
-    while cap.isOpened():
-
-        ret, frame = cap.read()
-        if not ret:
-            break
-
-        frame_count += 1
-
-        # Skip non-keyframes (process every 5th frame only)
-        if frame_count % 5 != 0:
-            continue
-
-        frame, detections = process_image(frame, mode=mode, conf=conf)
-        # total_objects += len(detections)
-        # total_threats += sum(1 for d in detections if d["threat"] == "HIGH RISK")
-        total_objects += len(detections)
-
-        total_threats += sum(
-            1 for d in detections
-            if d["threat"] == "HIGH RISK"
-        )
-        out.write(frame)
-        frame_written += 1
-
-    cap.release()
-    out.release()
-
-    print(f"Frames read = {frame_count}")
-    print(f"Frames written = {frame_written}")
-
-
+    # --------------------------------------------------
+    # Try H.264 via ffmpeg (best browser compatibility)
+    # --------------------------------------------------
     ffmpeg_available = shutil.which("ffmpeg") is not None
 
     if ffmpeg_available:
-        print("ffmpeg found – re-encoding to H.264 ...")
+        # Write frames with mp4v first, then re-encode with ffmpeg
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        out = cv2.VideoWriter(temp_path, fourcc, fps, (width, height))
+
+        frame_count   = 0
+        total_objects = 0
+        total_threats = 0
+
+        while cap.isOpened():
+            ret, frame = cap.read()
+            if not ret:
+                break
+            frame_count += 1
+            frame, detections = process_image(frame, mode=mode, conf=conf)
+            total_objects += len(detections)
+            total_threats += sum(1 for d in detections if d["threat"] == "HIGH RISK")
+            out.write(frame)
+
+        cap.release()
+        out.release()
+
+        print(f"Frames processed = {frame_count}")
+
         result = subprocess.run(
             [
                 "ffmpeg", "-y",
@@ -197,46 +181,55 @@ def process_video(path, mode="GROUND", conf=0.25):
                 "-vcodec", "libx264",
                 "-crf", "23",
                 "-preset", "fast",
+                "-pix_fmt", "yuv420p",
                 "-movflags", "+faststart",
-                output_path
+                final_path
             ],
             capture_output=True,
             text=True
         )
-        if result.returncode == 0:
+
+        if result.returncode == 0 and os.path.exists(final_path) and os.path.getsize(final_path) > 0:
             if os.path.exists(temp_path):
                 os.remove(temp_path)
-            print(f"Output size = {os.path.getsize(output_path)} bytes")
-            return output_path, total_objects, total_threats
+            print(f"ffmpeg output size = {os.path.getsize(final_path)} bytes")
+            return final_path, total_objects, total_threats
         else:
             print("ffmpeg re-encode failed:", result.stderr)
-            # fall through to avc1 attempt
+            # Fall through to avc1 attempt below using already-written temp_path
+            return temp_path, total_objects, total_threats
 
-    # --- Attempt 2: re-write with avc1 codec via OpenCV ---
-    print("Trying avc1 codec via OpenCV ...")
+    # --------------------------------------------------
+    # Fallback: write directly with avc1 (H.264 via OpenCV)
+    # Works on most systems where OpenCV is built with x264
+    # --------------------------------------------------
     fourcc_avc1 = cv2.VideoWriter_fourcc(*'avc1')
-    out2 = cv2.VideoWriter(output_path, fourcc_avc1, output_fps, (width, height))
+    out = cv2.VideoWriter(final_path, fourcc_avc1, fps, (width, height))
 
-    if out2.isOpened():
-        cap2 = cv2.VideoCapture(temp_path)
-        while True:
-            ret2, frm2 = cap2.read()
-            if not ret2:
-                break
-            out2.write(frm2)
-        cap2.release()
-        out2.release()
+    if not out.isOpened():
+        # Last resort: mp4v (may not play in browser but at least produces a file)
+        print("avc1 not available, falling back to mp4v")
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        out = cv2.VideoWriter(final_path, fourcc, fps, (width, height))
 
-        if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
-            print(f"avc1 output size = {os.path.getsize(output_path)} bytes")
-            return output_path, total_objects, total_threats
-        else:
-            print("avc1 produced empty file, falling back to mp4v")
-    else:
-        print("avc1 codec not available, falling back to mp4v")
+    frame_count   = 0
+    total_objects = 0
+    total_threats = 0
 
-    # --- Last resort: return the mp4v file ---
-    print("Returning raw mp4v file (may not play in browser)")
-    return temp_path, total_objects, total_threats
+    while cap.isOpened():
+        ret, frame = cap.read()
+        if not ret:
+            break
+        frame_count += 1
+        frame, detections = process_image(frame, mode=mode, conf=conf)
+        total_objects += len(detections)
+        total_threats += sum(1 for d in detections if d["threat"] == "HIGH RISK")
+        out.write(frame)
+
+    cap.release()
+    out.release()
+
+    print(f"Frames processed = {frame_count}")
+    print(f"Output size = {os.path.getsize(final_path)} bytes")
+
+    return final_path, total_objects, total_threats
