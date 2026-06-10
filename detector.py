@@ -207,7 +207,7 @@ def process_video(path, mode="GROUND", conf=0.25):
             if os.path.exists(temp_path):
                 os.remove(temp_path)
             print(f"Output size = {os.path.getsize(output_path)} bytes")
-            return output_path
+            return output_path, total_objects, total_threats
         else:
             print("ffmpeg re-encode failed:", result.stderr)
             # fall through to avc1 attempt
@@ -239,4 +239,4 @@ def process_video(path, mode="GROUND", conf=0.25):
 
     # --- Last resort: return the mp4v file ---
     print("Returning raw mp4v file (may not play in browser)")
-    return temp_path
+    return temp_path, total_objects, total_threats
