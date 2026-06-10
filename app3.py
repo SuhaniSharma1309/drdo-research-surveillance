@@ -75,7 +75,6 @@ if "result_img" not in st.session_state:
 # TOP METRICS
 # --------------------------------------------------
 
-# Place this BEFORE the controls, after session state init
 metrics_placeholder = st.empty()
 
 def render_metrics():
@@ -90,7 +89,6 @@ def render_metrics():
             st.metric("Restricted Zone", restricted)
         with k4:
             st.metric("System Status", "ONLINE")
-
 
 
 # --------------------------------------------------
@@ -114,11 +112,10 @@ with c2:
     )
 
 conf = st.slider("Confidence Threshold", 0.0, 1.0, 0.25)
+
 if mode == "Image Analysis":
     render_metrics()
     st.divider()
-    
-# st.divider()
 
 # --------------------------------------------------
 # IMAGE MODE
@@ -198,28 +195,33 @@ else:
 
     if vid:
 
-        path = "temp_input.mp4"
+        input_path = "temp_input.mp4"
 
-        with open(path, "wb") as f:
+        with open(input_path, "wb") as f:
             f.write(vid.read())
 
         if st.button("▶ Run Video Detection", use_container_width=True):
 
             with st.spinner("Processing video — this may take a moment..."):
-                processed_path, total_objects, total_threats = process_video(path, mode=type_, conf=conf)
+                processed_path, total_objects, total_threats = process_video(
+                    input_path, mode=type_, conf=conf
+                )
 
-            
-            # render_metrics()  # re-render metrics in case they were updated during video processing
             if not os.path.exists(processed_path):
                 st.error("Processing failed — output file not found.")
             elif os.path.getsize(processed_path) == 0:
                 st.error("Processing failed — output file is empty.")
             else:
+                st.session_state.objects = total_objects
+                st.session_state.threats = total_threats
+                render_metrics()
+
                 video1, video2 = st.columns(2)
 
                 with video1:
                     st.subheader("Original Video")
-                    st.video(path)
+                    with open(input_path, "rb") as f:
+                        st.video(f.read())
 
                 with video2:
                     st.subheader("Detection Output")
@@ -227,8 +229,9 @@ else:
                         video_bytes = f.read()
                     st.video(video_bytes)
 
-                st.success(f"Done! Output size: {len(video_bytes) / 1024:.1f} KB")
-                
+                output_kb = os.path.getsize(processed_path) / 1024
+                st.success(f"Done! Output size: {output_kb:.1f} KB")
+
         st.markdown("---")
 
 st.markdown("""
